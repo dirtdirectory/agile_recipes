@@ -1,0 +1,224 @@
+<?php
+
+/**
+ * @file
+ * Module file for ah_recipes.
+ */
+
+/**
+ * Implements hook_menu().
+ */
+function ah_recipes_menu() {
+  return array(
+    'admin/config/services/recipes' => array(
+      'title' => 'Recipes Tools Config',
+      'description' => 'Configure Recipes integration.',
+      'page callback' => 'drupal_get_form',
+      'access arguments' => array('administer site configuration'),
+      'page arguments' => array('ah_recipes_admin'),
+      'file' => 'includes/ah_recipes_admin.form.inc',
+      'type' => MENU_NORMAL_ITEM,
+    ),
+  );
+}
+
+/**
+ * Implements hook_block_info().
+ */
+function ah_recipes_block_info() {
+  $blocks['dirt_tools'] = array(
+    'info' => t('Imported Tool information from DiRT'),
+    'cache' => DRUPAL_CACHE_PER_ROLE,
+  );
+  $blocks['dirt_tool'] = array(
+    'info' => t('Single DiRT tool'),
+    'status' => TRUE,
+    'region' => 'sidebar_first',
+    'visibility' => BLOCK_VISIBILITY_LISTED,
+    'pages' => 'taxonomy/term/*',
+  );
+  return $blocks;
+}
+
+/**
+ * Implements hook_block_view().
+ */
+function ah_recipes_block_view($delta = '') {
+  module_load_include('inc', 'ah_recipes', 'includes/utilities');
+  $has_content = FALSE;
+  switch ($delta) {
+    case 'dirt_tools':
+      $path_parts = explode('/', $_GET['q']);
+      if ($path_parts[0] == 'node' && isset($path_parts[1])) {
+        $nid = end($path_parts);
+        $node = node_load($nid);
+        if (isset($node->field_tools['und'])) {
+          $tools = $node->field_tools['und'];
+          $tools = array();
+          foreach ($tools as $tool) {
+            $tools[] = $tool['taxonomy_term']->name;
+          }
+          $block['subject'] = t('Tools used');
+          $block['content'] = ah_recipes_dirt_fetch(NULL, $tools);
+          $has_content = TRUE;
+        }
+      }
+
+      break;
+
+    case 'dirt_tool':
+      $block['subject'] = t('DiRT Tool');
+      $block['content'] = ah_recipes_dirt_get_term();
+      $has_content = TRUE;
+      break;
+  }
+  if ($has_content) {
+    return $block;
+  }
+}
+
+/**
+ * Implements hook_theme().
+ *
+ * Defines the theming capabilities provided by this module.
+ */
+function ah_recipes_theme() {
+  return array(
+    'recipes_dirt' => array(
+      'file' => 'theme/theme.inc',
+      'template' => 'theme/recipes-dirt',
+      'variables' => array('object' => NULL),
+    ),
+  );
+}
+
+/**
+ * Implements hook_services_resources().
+ */
+function ah_recipes_services_resources() {
+  $api = array(
+    'recipe' => array(
+      'operations' => array(
+        'retrieve' => array(
+          'help' => 'Retrieves posted recipes',
+          'callback' => '_ah_recipes_recipe_retrieve',
+          'access callback' => 'user_access',
+          'access arguments' => array('access content'),
+          'access arguments append' => FALSE,
+          'args' => array(
+            array(
+              'name' => 'fn',
+              'type' => 'string',
+              'description' => 'Function to perform',
+              'source' => array('path' => '0'),
+              'optional' => TRUE,
+              'default' => '0',
+            ),
+            array(
+              'name' => 'nrecipes',
+              'type' => 'int',
+              'description' => 'Number of latest recipes to get',
+              'source' => array('param' => 'nrecipes'),
+              'optional' => TRUE,
+              'default' => '0',
+            ),
+            array(
+              'name' => 'since',
+              'type' => 'int',
+              'description' => 'Posts from the last number of days',
+              'source' => array('param' => 'since'),
+              'optional' => TRUE,
+              'default' => '0',
+            ),
+          ),
+        ),
+      ),
+      'actions' => array(
+        'fetch' => array(
+          'help' => 'Retrieves posted recipes',
+          'callback' => '_ah_recipes_recipe_retrieve',
+          'access callback' => 'user_access',
+          'access arguments' => array('access content'),
+          'access arguments append' => FALSE,
+          'args' => array(
+            array(
+              'name' => 'fn',
+              'type' => 'string',
+              'description' => 'Function to perform',
+              'source' => array('path' => '0'),
+              'optional' => TRUE,
+              'default' => '0',
+            ),
+            array(
+              'name' => 'nrecipes',
+              'type' => 'int',
+              'description' => 'Number of latest recipes to get',
+              'source' => array('param' => 'nrecipes'),
+              'optional' => TRUE,
+              'default' => '0',
+            ),
+            array(
+              'name' => 'since',
+              'type' => 'int',
+              'description' => 'Posts from the last number of days',
+              'source' => array('param' => 'since'),
+              'optional' => TRUE,
+              'default' => '0',
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+
+  return $api;
+}
+
+/**
+ * Callback function for recipe retrieval.
+ */
+function _ah_recipes_recipe_retrieve($fn, $nrecipes, $timestamp) {
+  // Sanitize inputs.
+  $nrecipes = intval($nrecipes);
+  $timestamp = intval($timestamp);
+  return
+      ah_recipes_find_recipe($nrecipes, $timestamp);
+}
+
+/**
+ * Gets recipe posts.
+ */
+function ah_recipes_find_recipe($nrecipes, $toolname) {
+  $nrecipes = isset($_POST['nrecipes']) ? $_POST['nrecipes'] : NULL;
+  $tool_name = isset($_POST['tool_name']) ? $_POST['tool_name'] : NULL;
+  $taxonomy = isset($_POST['taxonomy']) ? $_POST['taxonomy'] : 'tools';
+  $sort = isset($_POST['sort']) ? $_POST['sort'] : 'timestamp';
+  switch ($sort) {
+    case 'timestamp':
+      $orderby = 'v.timestamp';
+      $direction = 'DESC';
+
+      break;
+    case 'title':
+      $orderby = 'v.title';
+      $direction = 'ASC';
+  }
+  $return_count = variable_get('ah_recipes_max_tool_count', '5');
+  $query = db_select('node', 'n');
+  $query->join('node_revision', 'v', '(n.nid = v.nid) AND (n.vid = v.vid)');
+  $query->join('field_revision_field_tools', 'tu', '(tu.revision_id = v.vid)');
+  $query->condition('n.type', 'recipe', '=');
+  $query->fields('n', array('nid'));
+  $query->fields('v', array('title'));
+  $query->fields('tu', array('field_tools_tid'));
+  if (isset($tool_name)) {
+    $terms = taxonomy_get_term_by_name($tool_name, $taxonomy);
+    $term = array_shift($terms);
+    $query->condition('tu.field_tools_tid', $term->tid, '=');
+  }
+  $query->orderBy($orderby, $direction);
+  $query->range(0, $return_count);
+  $recipes = $query->execute()->fetchAll();
+
+  return $recipes;
+}

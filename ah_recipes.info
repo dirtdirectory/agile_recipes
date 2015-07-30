@@ -1,0 +1,6 @@
+name = Agile Humanities Recipes
+description = Allows RESTful communication with DiRT for recipes
+core = 7.x
+package = Agile Humanities
+version = 7.x-1.0
+configure = admin/config/services/recipes
